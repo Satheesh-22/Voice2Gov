@@ -1,0 +1,81 @@
+# docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice2Gov — Full Stack Docker Compose
+# Starts 3 services: MongoDB, Node.js API, Python NLP
+#
+# Usage:
+#   docker-compose up --build          # start all services
+#   docker-compose up -d               # background mode
+#   docker-compose down -v             # stop & remove volumes
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+
+  # ── MongoDB ────────────────────────────────────────────────────────────────
+  mongodb:
+    image: mongo:7.0
+    container_name: voice2gov-mongo
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_DATABASE: voice2gov
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Python NLP Microservice ────────────────────────────────────────────────
+  nlp-service:
+    build:
+      context: ./voice2gov-nlp
+      dockerfile: Dockerfile
+    container_name: voice2gov-nlp
+    restart: unless-stopped
+    environment:
+      NLP_MODEL: ensemble
+      NLP_API_KEY: ${NLP_API_KEY:-}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: curl -f http://localhost:8000/health || exit 1
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Node.js Backend API ────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./voice2gov-backend
+      dockerfile: Dockerfile
+    container_name: voice2gov-api
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      nlp-service:
+        condition: service_healthy
+    environment:
+      PORT: 5000
+      NODE_ENV: production
+      MONGO_URI: mongodb://mongodb:27017/voice2gov
+      JWT_SECRET: ${JWT_SECRET:-change_me_in_production_32chars}
+      JWT_EXPIRES_IN: 7d
+      NLP_SERVICE_URL: http://nlp-service:8000
+      CLIENT_URL: http://localhost:3000
+      MAX_FILE_SIZE_MB: 10
+    ports:
+      - "5000:5000"
+    volumes:
+      - uploads_data:/app/uploads
+      - logs_data:/app/logs
+
+volumes:
+  mongo_data:
+  uploads_data:
+  logs_data:
